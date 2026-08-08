@@ -1,12 +1,12 @@
 @testable import ClamshellKit
 import XCTest
 
-final class ClamshellMonitorReadTests: XCTestCase {
-    func testReadReturnsAngleUsingTransientConnection() async throws {
+final class ClamshellMonitorAngleTests: XCTestCase {
+    func testAngleReturnsCurrentAngleUsingTransientConnection() async throws {
         let source = TestAngleSource(angle: 42)
         let monitor = ClamshellMonitor(source: source)
 
-        let angle = try await monitor.read()
+        let angle = try await monitor.angle()
 
         XCTAssertEqual(angle, ClamshellAngle(degrees: 42))
         XCTAssertEqual(

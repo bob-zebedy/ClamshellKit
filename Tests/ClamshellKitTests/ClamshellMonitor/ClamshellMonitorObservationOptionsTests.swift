@@ -31,9 +31,9 @@ final class ClamshellMonitorObservationOptionsTests: XCTestCase {
         )
         var iterator = stream.makeAsyncIterator()
 
-        let initialValue = try await iterator.next()
+        let initialReading = try await iterator.next()
 
-        XCTAssertEqual(initialValue, ClamshellAngle(degrees: 15))
+        XCTAssertEqual(initialReading?.angle, ClamshellAngle(degrees: 15))
         XCTAssertEqual(source.snapshot.openCount, 1)
     }
 }

@@ -2,12 +2,12 @@ import Dispatch
 import Foundation
 
 actor ClamshellMonitorCore {
-    typealias Continuation = AsyncThrowingStream<ClamshellAngle, any Error>.Continuation
+    typealias Continuation = AsyncThrowingStream<ClamshellReading, any Error>.Continuation
 
     private struct Observer {
         let continuation: Continuation
         let maximumFrequency: Double?
-        var lastValue: ClamshellAngle?
+        var lastValue: ClamshellReading?
         var lastDeliveryTime: UInt64?
     }
 
@@ -15,7 +15,8 @@ actor ClamshellMonitorCore {
 
     private var observers: [UUID: Observer] = [:]
     private var isSourceOpen = false
-    private var latestValue: ClamshellAngle?
+    private var estimator = ClamshellMotionEstimator()
+    private var latestReading: ClamshellReading?
     private var pollingTask: Task<Void, Never>?
     private var pollingGeneration: UInt64 = 0
 
@@ -25,24 +26,23 @@ actor ClamshellMonitorCore {
 
     var status: ClamshellStatus {
         get async {
+            defer { closeSourceIfIdle() }
+
             do {
-                _ = try readAndPublish()
-                closeSourceIfIdle()
+                _ = try readAngle()
                 return .available
             } catch {
-                closeSourceIfIdle()
                 return Self.status(for: Self.normalize(error))
             }
         }
     }
 
-    func read() throws -> ClamshellAngle {
+    func angle() throws -> ClamshellAngle {
+        defer { closeSourceIfIdle() }
+
         do {
-            let value = try readAndPublish()
-            closeSourceIfIdle()
-            return value
+            return try readAngle()
         } catch {
-            closeSourceIfIdle()
             throw Self.normalize(error)
         }
     }
@@ -69,12 +69,12 @@ actor ClamshellMonitorCore {
         )
 
         do {
-            if wasEmpty || latestValue == nil || !isSourceOpen {
-                let value = try readFromSource()
-                latestValue = value
-                deliver(value, forcing: [id])
-            } else if let latestValue {
-                deliver(latestValue, forcing: [id])
+            if wasEmpty || !isSourceOpen {
+                resetMotionState()
+                let angle = try readFromSource()
+                process(angle: angle)
+            } else if let latestReading {
+                deliver(latestReading, forcing: [id])
             }
 
             guard observers[id] != nil else {
@@ -97,7 +97,7 @@ actor ClamshellMonitorCore {
 
         if observers.isEmpty {
             stopPolling()
-            latestValue = nil
+            resetMotionState()
             closeSource()
         } else {
             restartPolling()
@@ -109,13 +109,11 @@ actor ClamshellMonitorCore {
         source.close()
     }
 
-    private func readAndPublish() throws -> ClamshellAngle {
+    private func readAngle() throws -> ClamshellAngle {
         do {
-            let value = try readFromSource()
-            latestValue = value
-            deliver(value)
-            return value
+            return try readFromSource()
         } catch {
+            resetMotionState()
             closeSource()
             throw error
         }
@@ -135,7 +133,7 @@ actor ClamshellMonitorCore {
             return
         }
 
-        latestValue = nil
+        resetMotionState()
         closeSource()
     }
 
@@ -172,15 +170,10 @@ actor ClamshellMonitorCore {
 
     private var pollingIntervalNanoseconds: UInt64 {
         let advertisedFrequency = source.maximumObservationFrequency
-        let sourceFrequency =
+        let frequency =
             advertisedFrequency.isFinite && advertisedFrequency > 0
                 ? advertisedFrequency
                 : 20
-        let requestedFrequency =
-            observers.values
-                .map { $0.maximumFrequency ?? sourceFrequency }
-                .max() ?? sourceFrequency
-        let frequency = min(sourceFrequency, requestedFrequency)
 
         return Self.nanoseconds(for: frequency)
     }
@@ -198,14 +191,14 @@ actor ClamshellMonitorCore {
             }
 
             do {
-                let value = try readFromSource()
-                latestValue = value
-                deliver(value)
+                let angle = try readFromSource()
+                process(angle: angle)
             } catch {
+                resetMotionState()
+
                 do {
-                    let value = try await reconnectAndRead(generation: generation)
-                    latestValue = value
-                    deliver(value)
+                    let angle = try await reconnectAndRead(generation: generation)
+                    process(angle: angle)
                 } catch is CancellationError {
                     return
                 } catch {
@@ -255,7 +248,7 @@ actor ClamshellMonitorCore {
     }
 
     private func deliver(
-        _ value: ClamshellAngle,
+        _ value: ClamshellReading,
         forcing forcedObservers: Set<UUID> = []
     ) {
         let now = DispatchTime.now().uptimeNanoseconds
@@ -297,7 +290,7 @@ actor ClamshellMonitorCore {
 
         if observers.isEmpty {
             stopPolling()
-            latestValue = nil
+            resetMotionState()
             closeSource()
         }
     }
@@ -305,13 +298,33 @@ actor ClamshellMonitorCore {
     private func finishObservers(throwing error: ClamshellError) {
         let continuations = observers.values.map(\.continuation)
         observers.removeAll()
-        latestValue = nil
+        resetMotionState()
         stopPolling()
         closeSource()
 
         for continuation in continuations {
             continuation.finish(throwing: error)
         }
+    }
+
+    private func process(angle: ClamshellAngle) {
+        let timestamp = DispatchTime.now().uptimeNanoseconds
+
+        guard let reading = estimator.add(
+            angle: angle,
+            timestamp: timestamp
+        ) else {
+            latestReading = nil
+            return
+        }
+
+        latestReading = reading
+        deliver(reading)
+    }
+
+    private func resetMotionState() {
+        estimator.reset()
+        latestReading = nil
     }
 
     private static func normalize(_ error: any Error) -> ClamshellError {

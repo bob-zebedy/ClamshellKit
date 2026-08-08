@@ -1,11 +1,11 @@
-/// Options that control delivery of observed angle changes.
+/// Options that control delivery of observed clamshell readings.
 public struct ClamshellObservationOptions: Sendable, Equatable {
     public static let `default` = Self()
 
     /// The maximum number of values delivered per second.
     ///
-    /// A value of `nil` disables additional throttling. The underlying source
-    /// may still impose a lower rate.
+    /// A value of `nil` disables delivery throttling. The underlying source
+    /// still determines the internal sampling rate.
     public var maximumFrequency: Double?
 
     /// Creates observation options.

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Reads and observes the display angle of supported Mac notebooks.
+/// Reads and observes the clamshell state of supported Mac notebooks.
 public final class ClamshellMonitor: Sendable {
     private let core: ClamshellMonitorCore
 
@@ -22,18 +22,36 @@ public final class ClamshellMonitor: Sendable {
         }
     }
 
-    /// Returns one angle reading.
-    public func read() async throws -> ClamshellAngle {
-        try await core.read()
+    /// Returns the current angle using one sensor read.
+    public func angle() async throws -> ClamshellAngle {
+        try await core.angle()
     }
 
-    /// Returns a stream containing the initial angle followed by angle changes.
+    /// Returns the current angle and estimated rotational motion.
+    ///
+    /// This method collects a short sequence of angle samples before returning.
+    public func reading() async throws -> ClamshellReading {
+        let stream = observe(options: .init(maximumFrequency: nil))
+        var iterator = stream.makeAsyncIterator()
+
+        guard let reading = try await iterator.next() else {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
+
+            throw ClamshellError.unavailable
+        }
+
+        return reading
+    }
+
+    /// Returns a stream of angle and estimated rotational-motion readings.
     ///
     /// Multiple streams share one device connection. Values are coalesced to
     /// the newest pending value when a consumer cannot keep up.
     public func observe(
         options: ClamshellObservationOptions = .default
-    ) -> AsyncThrowingStream<ClamshellAngle, any Error> {
+    ) -> AsyncThrowingStream<ClamshellReading, any Error> {
         guard options.isValid else {
             return AsyncThrowingStream { continuation in
                 continuation.finish(throwing: ClamshellError.invalidOptions)

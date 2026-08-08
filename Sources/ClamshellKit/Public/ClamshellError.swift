@@ -1,6 +1,6 @@
 import Foundation
 
-/// Errors produced while accessing or observing the clamshell angle.
+/// Errors produced while accessing or observing the clamshell sensor.
 public enum ClamshellError: Error, LocalizedError, Sendable, Equatable {
     case unavailable
     case notFound
