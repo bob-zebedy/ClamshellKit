@@ -28,6 +28,45 @@ final class ClamshellMotionEstimatorTests: XCTestCase {
         XCTAssertEqual(reading.angularAcceleration, 0)
     }
 
+    func testVelocityRespondsToMotionWithinBalancedLatency() throws {
+        let estimates = estimate(duration: 2) { time in
+            time <= 1
+                ? 100
+                : (100 + 30 * (time - 1)).rounded()
+        }
+        let response = try XCTUnwrap(
+            estimates.first {
+                $0.time >= 1 && $0.reading.angularVelocity >= 27
+            }
+        )
+
+        XCTAssertLessThanOrEqual(response.time - 1, 0.3)
+    }
+
+    func testAccelerationRespondsWithinBalancedLatency() throws {
+        let estimates = estimate(duration: 3) { time in
+            if time <= 1 {
+                return (100 + 10 * time).rounded()
+            }
+
+            let acceleratingTime = time - 1
+            return (
+                110
+                    + 10 * acceleratingTime
+                    + 10 * acceleratingTime * acceleratingTime
+            ).rounded()
+        }
+
+        let response = try XCTUnwrap(
+            estimates.first {
+                $0.time >= 1
+                    && $0.reading.angularAcceleration >= 10
+            }
+        )
+
+        XCTAssertLessThanOrEqual(response.time - 1, 0.4)
+    }
+
     func testStationaryOneDegreeJitterRemainsAtRest() {
         let estimates = estimate(duration: 2) { time in
             Int((time * 60).rounded()).isMultiple(of: 2) ? 123 : 124

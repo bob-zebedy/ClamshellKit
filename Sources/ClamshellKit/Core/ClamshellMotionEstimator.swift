@@ -1,6 +1,5 @@
-/// Estimates motion from quantized angle reports using two causal regression
-/// windows. The first smooths angle into velocity; the second smooths velocity
-/// into acceleration.
+/// Uses causal weighted regressions to estimate velocity from quantized angle
+/// reports, then acceleration from the velocity estimates.
 struct ClamshellMotionEstimator {
     private struct Sample {
         let value: Double
@@ -12,12 +11,15 @@ struct ClamshellMotionEstimator {
         let meanTimestamp: UInt64
     }
 
+    // Keep enough whole-degree samples for stable estimates while weighting
+    // recent motion slightly more heavily to reduce causal-window lag.
     private static let velocityWindowNanoseconds: UInt64 = 350000000
     private static let minimumVelocitySpanNanoseconds: UInt64 = 200000000
-    private static let accelerationWindowNanoseconds: UInt64 = 500000000
+    private static let accelerationWindowNanoseconds: UInt64 = 400000000
     private static let minimumAccelerationSpanNanoseconds: UInt64 = 300000000
     private static let maximumGapNanoseconds: UInt64 = 1000000000
     private static let nanosecondsPerSecond = 1000000000.0
+    private static let newestSampleRegressionWeight = 1.5
 
     // The current Apple profile reports whole degrees. Requiring two degrees
     // of travel prevents one-degree quantization chatter from starting motion.
@@ -25,7 +27,10 @@ struct ClamshellMotionEstimator {
     private static let motionExitRange = 1.0
     private static let motionVelocityThreshold = 1.5
     private static let velocityDeadband = 0.75
-    private static let accelerationDeadband = 2.0
+
+    /// The shorter acceleration window exposes slightly more quantization
+    /// noise, so values below this reliable floor remain at rest.
+    private static let accelerationDeadband = 3.5
 
     private var angleSamples: [Sample] = []
     private var velocitySamples: [Sample] = []
@@ -148,26 +153,49 @@ struct ClamshellMotionEstimator {
 
     private func regression(of samples: [Sample]) -> Regression? {
         guard samples.count >= 2,
-              let firstTimestamp = samples.first?.timestamp else {
+              let firstTimestamp = samples.first?.timestamp,
+              let lastTimestamp = samples.last?.timestamp,
+              lastTimestamp > firstTimestamp else {
             return nil
         }
 
-        let count = Double(samples.count)
-        let meanTime = samples.reduce(0.0) {
-            $0 + seconds($1.timestamp - firstTimestamp)
-        } / count
-        let meanValue = samples.reduce(0.0) {
-            $0 + $1.value
-        } / count
+        let timestampSpan = Double(lastTimestamp - firstTimestamp)
+        let weightRange = Self.newestSampleRegressionWeight - 1
+        let weightScale = weightRange / timestampSpan
+        var totalWeight = 0.0
+        var weightedTime = 0.0
+        var weightedValue = 0.0
+
+        for sample in samples {
+            let sampleWeight = regressionWeight(
+                for: sample.timestamp,
+                after: firstTimestamp,
+                scale: weightScale
+            )
+            totalWeight += sampleWeight
+            weightedTime += sampleWeight
+                * seconds(sample.timestamp - firstTimestamp)
+            weightedValue += sampleWeight * sample.value
+        }
+
+        let meanTime = weightedTime / totalWeight
+        let meanValue = weightedValue / totalWeight
 
         var timeVariance = 0.0
         var covariance = 0.0
 
         for sample in samples {
+            let sampleWeight = regressionWeight(
+                for: sample.timestamp,
+                after: firstTimestamp,
+                scale: weightScale
+            )
             let centeredTime = seconds(sample.timestamp - firstTimestamp)
                 - meanTime
-            timeVariance += centeredTime * centeredTime
-            covariance += centeredTime * (sample.value - meanValue)
+            timeVariance += sampleWeight * centeredTime * centeredTime
+            covariance += sampleWeight
+                * centeredTime
+                * (sample.value - meanValue)
         }
 
         guard timeVariance > 0 else {
@@ -187,6 +215,14 @@ struct ClamshellMotionEstimator {
             slope: slope,
             meanTimestamp: firstTimestamp + meanOffset
         )
+    }
+
+    private func regressionWeight(
+        for timestamp: UInt64,
+        after firstTimestamp: UInt64,
+        scale: Double
+    ) -> Double {
+        1 + Double(timestamp - firstTimestamp) * scale
     }
 
     private func hasMinimumSpan(
