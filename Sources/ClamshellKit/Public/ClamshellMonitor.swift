@@ -1,6 +1,6 @@
 import Foundation
 
-/// Reads and observes the clamshell state of supported Mac notebooks.
+/// Reads and observes the clamshell state of supported Mac notebooks
 public final class ClamshellMonitor: Sendable {
     private let core: ClamshellMonitorCore
 
@@ -12,24 +12,24 @@ public final class ClamshellMonitor: Sendable {
         core = ClamshellMonitorCore(source: source)
     }
 
-    /// The device's current availability.
+    /// The device's current availability
     ///
-    /// Reading this property probes the device, so the result reflects the
-    /// current machine rather than a cached startup value.
+    /// Reading this property probes the device and reflects the current
+    /// machine instead of a cached startup value
     public var status: ClamshellStatus {
         get async {
             await core.status
         }
     }
 
-    /// Returns the current angle using one sensor read.
+    /// Returns the current angle using one sensor read
     public func angle() async throws -> ClamshellAngle {
         try await core.angle()
     }
 
-    /// Returns the current angle and estimated rotational motion.
+    /// Returns the current angle and estimated rotational motion
     ///
-    /// This method collects a short sequence of angle samples before returning.
+    /// This method collects a short sequence of angle samples before returning
     public func reading() async throws -> ClamshellReading {
         let stream = observe(options: .init(maximumFrequency: nil))
         var iterator = stream.makeAsyncIterator()
@@ -45,10 +45,11 @@ public final class ClamshellMonitor: Sendable {
         return reading
     }
 
-    /// Returns a stream of angle and estimated rotational-motion readings.
+    /// Returns a stream of angle and estimated rotational-motion readings
     ///
-    /// Multiple streams share one device connection. Values are coalesced to
-    /// the newest pending value when a consumer cannot keep up.
+    /// Multiple streams share one device connection
+    ///
+    /// Values are coalesced to the newest pending value when a consumer cannot keep up
     public func observe(
         options: ClamshellObservationOptions = .default
     ) -> AsyncThrowingStream<ClamshellReading, any Error> {

@@ -1,5 +1,5 @@
 /// Uses causal weighted regressions to estimate velocity from quantized angle
-/// reports, then acceleration from the velocity estimates.
+/// reports and then acceleration from the velocity estimates
 struct ClamshellMotionEstimator {
     private struct Sample {
         let value: Double
@@ -12,7 +12,7 @@ struct ClamshellMotionEstimator {
     }
 
     // Keep enough whole-degree samples for stable estimates while weighting
-    // recent motion slightly more heavily to reduce causal-window lag.
+    // recent motion slightly more heavily to reduce causal-window lag
     private static let velocityWindowNanoseconds: UInt64 = 350000000
     private static let minimumVelocitySpanNanoseconds: UInt64 = 200000000
     private static let accelerationWindowNanoseconds: UInt64 = 400000000
@@ -21,15 +21,15 @@ struct ClamshellMotionEstimator {
     private static let nanosecondsPerSecond = 1000000000.0
     private static let newestSampleRegressionWeight = 1.5
 
-    // The current Apple profile reports whole degrees. Requiring two degrees
-    // of travel prevents one-degree quantization chatter from starting motion.
+    // The current Apple profile reports whole degrees
+    // Requiring two degrees of travel prevents one-degree quantization chatter from starting motion
     private static let motionEntryRange = 2.0
     private static let motionExitRange = 1.0
     private static let motionVelocityThreshold = 1.5
     private static let velocityDeadband = 0.75
 
     /// The shorter acceleration window exposes slightly more quantization
-    /// noise, so values below this reliable floor remain at rest.
+    /// noise and values below this reliable floor remain at rest
     private static let accelerationDeadband = 3.5
 
     private var angleSamples: [Sample] = []

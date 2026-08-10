@@ -22,7 +22,7 @@ struct ClamshellLive {
                 hasRendered = true
             }
         } catch is CancellationError {
-            // Cancellation is the expected way to stop observing.
+            // Cancellation is the expected way to stop observing
         } catch {
             writeError("\n读取停止: \(error.localizedDescription)\n")
             return

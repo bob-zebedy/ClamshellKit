@@ -1,9 +1,10 @@
 import Foundation
 import IOKit.hid
 
-/// IOKit references are confined to `ClamshellMonitorCore`. The unchecked
-/// conformance only permits transferring ownership into that actor; callers
-/// must not invoke this type concurrently.
+/// Confines IOKit references to the `ClamshellMonitorCore` actor
+///
+/// The unchecked conformance only permits ownership transfer into that actor
+/// Callers must not invoke this type concurrently
 final class IOKitHIDSource: ClamshellAngleSource, @unchecked Sendable {
     private let profiles: [any HIDSensorProfile]
 
@@ -41,9 +42,9 @@ final class IOKitHIDSource: ClamshellAngleSource, @unchecked Sendable {
             )
         }
 
-        // A manager opens all matching devices, so matching must be installed
-        // before it is opened. Opening the selected device again would create
-        // an unnecessary second open/close lifecycle.
+        // Install matching before opening because a manager opens all matching devices
+        //
+        // Opening the selected device again would create an unnecessary second open/close lifecycle
         let managerResult = IOHIDManagerOpen(manager, options)
         guard managerResult == kIOReturnSuccess else {
             throw Self.map(managerResult, fallback: .unavailable)

@@ -29,7 +29,7 @@ struct AppleLegacyOrientationProfile: HIDSensorProfile {
             UInt16(report[1])
                 | (UInt16(report[2]) << 8)
 
-        // This profile's HID descriptor declares a logical range of 0...360°.
+        // This profile's HID descriptor declares a logical range of 0...360°
         guard rawAngle <= 360 else {
             throw ClamshellError.invalidData
         }

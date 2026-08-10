@@ -1,8 +1,6 @@
 # ClamshellLive
 
-ClamshellLive 是一个可直接运行的终端示例，用于实时显示屏幕开合角度、角速度和
-角加速度。它作为独立 Swift Package 通过本地依赖调用仓库根目录中的 ClamshellKit，
-不会向 ClamshellKit SDK 增加命令行产品。
+ClamshellLive 是一个可直接运行的终端示例，用于实时显示屏幕开合角度、角速度和角加速度。
 
 ## 运行
 
@@ -18,8 +16,7 @@ swift run --package-path Examples/ClamshellLive ClamshellLive
 角加速度:  +0.00°/s²
 ```
 
-正角速度表示屏幕正在打开，负角速度表示屏幕正在合上。角加速度的正负表示角速度
-沿相应方向变化，是否正在加速需要结合角速度的符号判断。
+正角速度表示屏幕正在打开，负角速度表示屏幕正在合上。角加速度的正负表示角速度沿相应方向变化，是否正在加速需要结合角速度的符号判断。
 
 ## 构建后运行
 

@@ -9,10 +9,10 @@ struct HIDReportRequest: Sendable {
 }
 
 protocol HIDSensorProfile: Sendable {
-    /// A broad match used to discover devices belonging to this sensor family.
+    /// A broad match used to discover devices belonging to this sensor family
     var candidateMatch: HIDDeviceMatch { get }
 
-    /// The exact device layout understood by this profile.
+    /// The exact device layout understood by this profile
     var deviceMatch: HIDDeviceMatch { get }
 
     var reportRequest: HIDReportRequest { get }

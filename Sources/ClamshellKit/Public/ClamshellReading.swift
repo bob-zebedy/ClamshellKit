@@ -1,14 +1,15 @@
-/// A snapshot of the clamshell's angle and estimated rotational motion.
+/// A snapshot of the clamshell's angle and estimated rotational motion
 public struct ClamshellReading: Sendable, Equatable {
-    /// The current angle between the display and the base.
+    /// The current angle between the display and the base
     public let angle: ClamshellAngle
 
-    /// The estimated angular velocity in degrees per second.
+    /// The estimated angular velocity in degrees per second
     ///
-    /// Positive values indicate opening; negative values indicate closing.
+    /// Positive values indicate opening
+    /// Negative values indicate closing
     public let angularVelocity: Double
 
-    /// The estimated angular acceleration in degrees per second squared.
+    /// The estimated angular acceleration in degrees per second squared
     public let angularAcceleration: Double
 
     public init(

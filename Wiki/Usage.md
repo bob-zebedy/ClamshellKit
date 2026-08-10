@@ -1,10 +1,10 @@
-# API 使用指南
+# 使用指南
 
-本指南详细介绍 ClamshellKit 的公开 API、适用场景、生命周期和错误处理方式。
+本指南详细介绍 ClamshellKit 公开 API 的适用场景、生命周期和错误处理方式。
 
 > [!IMPORTANT]
 > 屏幕开合角度不是 macOS 公开、稳定的系统能力。
-> 即使 `status` 返回 `.available` 后续读取也可能因设备状态变化而失败，因此所有读取操作仍需处理错误。
+> 如果 `status` 返回 `.available` 状态，后续读取仍可能因设备状态变化而失败，因此所有读取操作都需要处理错误。
 
 > [!NOTE]
 > `angularVelocity` 和 `angularAcceleration` 根据连续角度样本估算，并非传感器直接提供的原始测量值。
@@ -30,8 +30,8 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 操作系统 | macOS 12 或更高版本 |
-| Swift | Swift 6.0 或更高版本 |
+| 操作系统 | macOS `12` 或更高版本 |
+| Swift | Swift `6.0` 或更高版本 |
 | 硬件 | 具有兼容屏幕角度传感器的 Mac 笔记本 |
 
 屏幕开合角度不是 macOS 公开、稳定的系统能力，兼容性可能随机型、系统版本和运行环境变化。
@@ -42,18 +42,18 @@
 ### Xcode
 
 1. 选择 **File > Add Package Dependencies…**
-2. 输入仓库地址：
+2. 输入仓库地址
 
    ```text
    https://github.com/bob-zebedy/ClamshellKit.git
    ```
 
-3. `Dependency Rule` 选择 **Branch**，填写 `main`
-4. 将 `ClamshellKit` 添加到 macOS App target。
+3. 将 `Dependency Rule` 设置为 `Branch` 并填写 `main`
+4. 将 `ClamshellKit` 添加到 macOS App 的 `target`
 
-### Package.swift
+### `Package.swift`
 
-在包的依赖中添加 ClamshellKit：
+将 ClamshellKit 添加到包的依赖中：
 
 ```swift
 dependencies: [
@@ -64,7 +64,7 @@ dependencies: [
 ]
 ```
 
-然后在对应 target 中引用：
+然后在对应的 `target` 中引用：
 
 ```swift
 dependencies: [
@@ -81,7 +81,7 @@ dependencies: [
 | 一次获取角度和运动数据 | `reading()` | 收集短序列后返回估算结果 |
 | 连续更新界面或记录数据 | `observe(options:)` | 返回异步流，支持限频和取消 |
 
-建议在同一功能生命周期内复用一个 `ClamshellMonitor` 它是 `Sendable` 类型，可以安全地跨并发任务传递；不需要手动打开或关闭传感器连接。
+建议在同一功能生命周期内复用一个 `ClamshellMonitor` 实例。该类型实现 `Sendable` 协议，可以安全地跨并发任务传递。使用时不需要手动打开或关闭传感器连接。
 
 ## 创建监视器
 
@@ -130,17 +130,17 @@ case .accessDenied:
 ```swift
 do {
     let angle = try await monitor.angle()
-    print("Angle: \(angle.degrees)°")
+    print("角度: \(angle.degrees)°")
 } catch {
-    print("Read failed: \(error.localizedDescription)")
+    print("读取失败: \(error.localizedDescription)")
 }
 ```
 
 `angle()` 执行一次传感器读取并返回 `ClamshellAngle`
 
-`degrees` 表示屏幕与机身之间的夹角，单位为度 (`°`)
+`degrees` 表示屏幕与机身之间的夹角，返回值以 `°` 为单位。
 
-只关心当前角度时优先使用 `angle()`；与 `reading()` 相比，它不需要为估算运动数据收集连续样本，因此返回更快、开销更低。
+只关心当前角度时应优先调用 `angle()` 方法。与 `reading()` 方法相比，它不需要为估算运动数据收集连续样本，因此返回更快、开销更低。
 
 ## 读取完整运动数据
 
@@ -148,24 +148,23 @@ do {
 do {
     let reading = try await monitor.reading()
 
-    print("Angle: \(reading.angle.degrees)°")
-    print("Angular velocity: \(reading.angularVelocity)°/s")
-    print("Angular acceleration: \(reading.angularAcceleration)°/s²")
+    print("角度: \(reading.angle.degrees)°")
+    print("角速度: \(reading.angularVelocity)°/s")
+    print("角加速度: \(reading.angularAcceleration)°/s²")
 } catch {
-    print("Read failed: \(error.localizedDescription)")
+    print("读取失败: \(error.localizedDescription)")
 }
 ```
 
-`reading()` 返回一个 `ClamshellReading` 其中包含：
+`reading()` 返回 `ClamshellReading` 类型的完整读数，内容如下：
 
 | 成员 | 单位 | 含义 |
 | --- | --- | --- |
 | `angle.degrees` | `°` | 当前屏幕开合角度 |
-| `angularVelocity` | `°/s` | 估算角速度；正值表示打开，负值表示合上 |
+| `angularVelocity` | `°/s` | 估算角速度，正值表示打开，负值表示合上 |
 | `angularAcceleration` | `°/s²` | 估算角加速度 |
 
-该方法需要收集一小段连续角度样本，因此通常不会像 `angle()` 一样立即返回。静止时角速度和
-角加速度为 `0`。判断屏幕是否正在加速或减速时，需要结合角速度与角加速度的符号，而不能只看角加速度。
+该方法需要收集一小段连续角度样本，因此通常不会像 `angle()` 方法一样立即返回。静止时，角速度和角加速度均使用 `0` 表示。判断屏幕是否正在加速或减速时，需要结合角速度与角加速度的符号，而不能只看角加速度。
 
 ### 当前运动估算参数
 
@@ -199,7 +198,7 @@ let observationTask = Task {
     } catch is CancellationError {
         // 主动取消属于正常结束, 不需要提示错误
     } catch {
-        print("Observation failed: \(error.localizedDescription)")
+        print("观察失败: \(error.localizedDescription)")
     }
 }
 
@@ -207,7 +206,7 @@ let observationTask = Task {
 observationTask.cancel()
 ```
 
-`observe(options:)` 返回 `AsyncThrowingStream<ClamshellReading, any Error>` 方法本身不会抛出错误；连接、读取和参数错误会在遍历流时抛出。
+`observe(options:)` 返回 `AsyncThrowingStream<ClamshellReading, any Error>` 异步流。方法本身不会抛出错误，连接、读取和参数错误会在遍历流时抛出。
 
 观察流具有以下行为：
 
@@ -217,8 +216,7 @@ observationTask.cancel()
 - 遇到临时断线时会自动尝试重新连接，无法恢复时以错误结束
 - 取消消费任务或释放流后，订阅会自动移除，最后一个订阅结束时连接会关闭
 
-因此，`observe(options:)` 适合展示最新状态，不保证交付每一个底层采样值。如果业务要求
-无损记录所有原始样本，当前 API 不提供该语义。
+使用 `observe(options:)` 可以展示最新状态，但不能保证交付每一个底层采样值。如果业务要求无损记录所有原始样本，当前 API 不提供该语义。
 
 ## 控制发送频率
 
@@ -237,7 +235,7 @@ for try await reading in monitor.observe(options: options) {
 | 省略或 `30` | 默认最多 `30 Hz` |
 | 大于 `0` 的有限值 | 使用指定的最大发送频率 |
 | `nil` | 不额外限制发送频率 |
-| `0`、负数、`NaN` 或无穷大 | 遍历流时抛出 `.invalidOptions` |
+| 值为 `0` 或负数，或者为 `NaN` 及无穷大 | 遍历流时抛出 `.invalidOptions` |
 
 该选项限制的是对调用方的发送频率，不会提高传感器的采样能力。
 实际频率不会超过底层传感器支持的上限，而且相同读数不会为了满足频率而重复发送。
@@ -255,7 +253,7 @@ public struct ClamshellAngle: Sendable, Equatable {
 }
 ```
 
-表示屏幕与机身之间的夹角。`Equatable` 可用于检测角度是否变化，`Sendable` 允许值安全地跨并发边界传递。
+该类型表示屏幕与机身之间的夹角。使用 `Equatable` 可以检测角度是否变化，使用 `Sendable` 可以让值安全地跨并发边界传递。
 
 ### `ClamshellReading`
 
@@ -286,7 +284,7 @@ public struct ClamshellObservationOptions: Sendable, Equatable {
 }
 ```
 
-配置单个观察流的发送行为 `.default` 等价于 `ClamshellObservationOptions(maximumFrequency: 30)`
+该类型配置单个观察流的发送行为，其中 `ClamshellObservationOptions(maximumFrequency: 30)` 等价于 `.default`
 
 ## 状态与错误
 
@@ -315,7 +313,7 @@ public struct ClamshellObservationOptions: Sendable, Equatable {
 | `.invalidOptions` | `ClamshellObservationOptions` 无效 | 修正 `maximumFrequency` |
 | `.systemError(code:)` | IOKit 返回系统错误 | 记录错误码并按暂时不可用处理 |
 
-所有错误都实现 `LocalizedError` 可以使用 `localizedDescription` 获取可读描述。
+所有错误都实现 `LocalizedError` 协议，可以使用 `localizedDescription` 属性获取可读描述。
 需要针对不同原因采取措施时，应转换为 `ClamshellError`
 
 ```swift
@@ -335,7 +333,7 @@ do {
     case .invalidOptions:
         print("观察参数无效")
     case let .systemError(code):
-        print("IOKit error: \(code)")
+        print("IOKit 错误: \(code)")
     }
 } catch is CancellationError {
     // 正常取消
@@ -346,15 +344,14 @@ do {
 
 ## 并发、连接与生命周期
 
-- `ClamshellMonitor` 所有公开值类型以及状态和错误类型均为 `Sendable`
-- 同一个监视器上的多个观察流共享一个底层设备连接；
-- `status` 和一次性读取在没有活动观察者时会按需打开并释放连接；
-- 观察期间调用一次性读取会复用当前连接；
-- 每个观察流拥有独立的发送频率和最新值缓冲；
-- 无需调用 `close()` 取消任务或结束流消费即可释放订阅资源。
+- 类型 `ClamshellMonitor` 与所有公开值类型、状态类型和错误类型均为 `Sendable`
+- 同一个监视器上的多个观察流共享一个底层设备连接
+- `status` 和一次性读取在没有活动观察者时会按需打开并释放连接
+- 观察期间调用一次性读取会复用当前连接
+- 每个观察流拥有独立的发送频率和最新值缓冲
+- 无需调用 `close()` 方法，取消任务或结束流消费即可释放订阅资源
 
-在 App 中持续观察时，建议把返回的 `Task` 保存在与页面或功能相同的生命周期内，并在退出
-该生命周期时调用 `cancel()` 更新 UI 时再切换到 `MainActor` 不要在主线程上进行同步等待。
+在 App 中持续观察时，建议把返回的 `Task` 保存在与页面或功能相同的生命周期内，并在退出该生命周期时调用 `cancel()` 方法。更新 UI 时再交给 `MainActor` 执行，不要在主线程上进行同步等待。
 
 ## 完整示例
 
@@ -369,7 +366,7 @@ func observeClamshell() async {
     let status = await monitor.status
 
     guard status.isAvailable else {
-        print("Clamshell sensor is unavailable: \(status)")
+        print("屏幕角度传感器不可用: \(status)")
         return
     }
 
@@ -378,24 +375,24 @@ func observeClamshell() async {
     do {
         for try await reading in monitor.observe(options: options) {
             print(
-                "angle=\(reading.angle.degrees)°, "
-                    + "velocity=\(reading.angularVelocity)°/s, "
-                    + "acceleration=\(reading.angularAcceleration)°/s²"
+                "角度=\(reading.angle.degrees)°, "
+                    + "角速度=\(reading.angularVelocity)°/s, "
+                    + "角加速度=\(reading.angularAcceleration)°/s²"
             )
         }
     } catch is CancellationError {
         // 调用方结束了观察
     } catch {
-        print("Observation failed: \(error.localizedDescription)")
+        print("观察失败: \(error.localizedDescription)")
     }
 }
 ```
 
-仓库中的 [ClamshellLive](../Examples/ClamshellLive) 提供了可直接运行的终端示例
+仓库中的 [ClamshellLive](../Examples/ClamshellLive) 提供了可直接运行的终端示例。
 
 ## 完整 API 参考
 
-所有 API 均可在 `import ClamshellKit` 后使用
+所有 API 均可在 `import ClamshellKit` 后使用。
 
 ### API 声明
 
@@ -472,7 +469,7 @@ public enum ClamshellError: Error, LocalizedError, Sendable, Equatable {
 public init()
 ```
 
-创建监视器。初始化不会访问硬件，也不会提前建立连接；第一次读取 `status` 调用 `angle()` 调用 `reading()` 或创建观察流时才会访问传感器。
+创建监视器。初始化不会访问硬件，也不会提前建立连接；首次访问 `status` 属性、调用 `angle()` 方法或 `reading()` 方法，或创建观察流时，才会访问传感器。
 
 #### `status`
 
@@ -482,10 +479,10 @@ public var status: ClamshellStatus { get async }
 
 实时探测当前设备的可用状态。
 
-- 返回值：`ClamshellStatus`
-- 每次读取都会执行一次设备探测，不返回缓存状态；
+- 返回值类型为 `ClamshellStatus`
+- 每次读取都会执行一次设备探测，不返回缓存状态
 - 属性本身不抛出错误，而是将探测错误转换为对应状态
-- `.invalidData` 会映射为 `.unsupported`，无法进一步分类的读取故障会映射为 `.unavailable`
+- 出现 `.invalidData` 错误时会映射为 `.unsupported` 状态，无法进一步分类的读取故障会映射为 `.unavailable`
 
 `status` 只能用于预检。后续读取仍可能失败，调用方必须继续处理读取错误。
 
@@ -510,8 +507,8 @@ public func reading() async throws -> ClamshellReading
 
 返回当前角度以及估算的角速度和角加速度。
 
-- 返回值：`ClamshellReading`
-- 抛出：设备访问失败时抛出 `ClamshellError` 任务取消时可能抛出 `CancellationError`
+- 返回值类型为 `ClamshellReading`
+- 设备访问失败时抛出 `ClamshellError` 错误，任务取消时可能抛出 `CancellationError`
 - 为了估算运动数据，该方法会收集一小段连续样本，通常比 `angle()` 返回更慢
 - 如果已有活动观察流和可用读数，监视器会复用现有连接和数据管线
 
@@ -525,8 +522,8 @@ public func observe(
 
 创建持续发送完整运动读数的异步流。
 
-- `options`：控制当前观察者的最大发送频率，默认使用 `.default`
-- 返回值：`AsyncThrowingStream<ClamshellReading, any Error>`
+- 参数 `options` 控制当前观察者的最大发送频率，默认使用 `.default`
+- 返回值类型为 `AsyncThrowingStream<ClamshellReading, any Error>`
 - 创建流时会开始注册观察者，但方法调用本身不执行异步等待，也不抛出错误；注册和读取错误会在消费流时出现
 - 无效选项会使流以 `ClamshellError.invalidOptions` 结束
 - 缓冲策略为只保留最新的一个待读取值，慢消费者可能跳过中间读数
@@ -543,7 +540,7 @@ public func observe(
 public static let `default`: ClamshellObservationOptions
 ```
 
-默认观察配置，`maximumFrequency` 为 `30` 即最多发送 `30 Hz`
+默认配置中的 `maximumFrequency` 值为 `30` 并且每秒最多发送 `30 Hz`
 
 #### `maximumFrequency`
 
@@ -553,9 +550,9 @@ public var maximumFrequency: Double?
 
 每秒向当前观察者发送读数的最大次数。
 
-- `nil`：不额外限制发送频率
+- 值为 `nil` 时不额外限制发送频率
 - 大于 `0` 的有限值：使用指定上限
-- `0`、负数、`NaN` 或无穷大：无效，消费观察流时产生 `.invalidOptions`
+- 值为 `0` 或负数，或者为 `NaN` 及无穷大时无效，消费观察流时产生 `.invalidOptions`
 - 该值只限制发送频率，不会改变底层传感器的实际采样上限
 
 配置是值类型。传入 `observe(options:)` 后再修改原变量，不会改变已经创建的观察流。
@@ -568,7 +565,7 @@ public init(maximumFrequency: Double? = 30)
 
 创建观察配置。
 
-- `maximumFrequency`：每秒最多发送的读数数量，默认值为 `30`
+- 参数 `maximumFrequency` 表示每秒最多发送的读数数量，默认值为 `30`
 - 初始化器不会验证参数；参数在传给 `observe(options:)` 时验证
 
 ### `ClamshellAngle`
@@ -581,7 +578,7 @@ public init(maximumFrequency: Double? = 30)
 public let degrees: Double
 ```
 
-以度（`°`）为单位的角度值。
+角度值以 `°` 为单位。
 
 #### `init(degrees:)`
 
@@ -589,8 +586,7 @@ public let degrees: Double
 public init(degrees: Double)
 ```
 
-使用指定度数创建角度值。该初始化器不会校验有限性或传感器支持的角度范围；
-手动构造值时，调用方需要保证数据符合自身业务约束。
+使用指定度数创建角度值。该初始化器不会校验有限性或传感器支持的角度范围；手动构造值时，调用方需要保证数据符合自身业务约束。
 
 ### `ClamshellReading`
 
@@ -610,7 +606,7 @@ public let angle: ClamshellAngle
 public let angularVelocity: Double
 ```
 
-估算角速度，单位为度每秒(`°/s`) 正值表示屏幕正在打开，负值表示屏幕正在合上，`0` 表示当前估算为静止。
+估算角速度使用 `°/s` 作为单位。正值表示屏幕正在打开，负值表示屏幕正在合上，返回 `0` 时表示当前估算为静止。
 
 #### `angularAcceleration`
 
@@ -618,8 +614,7 @@ public let angularVelocity: Double
 public let angularAcceleration: Double
 ```
 
-估算角加速度，单位为度每二次方秒(`°/s²`) 需要结合 `angularVelocity` 的方向判断屏幕
-正在加速还是减速。
+估算角加速度使用 `°/s²` 作为单位。需要结合 `angularVelocity` 的方向判断屏幕正在加速还是减速。
 
 #### `init(angle:angularVelocity:angularAcceleration:)`
 
@@ -631,8 +626,7 @@ public init(
 )
 ```
 
-使用给定数据创建读数快照。该初始化器不会重新估算或校验运动数据，主要用于应用模型转换和
-测试数据构造。
+使用给定数据创建读数快照。该初始化器不会重新估算或校验运动数据，主要用于应用模型转换和测试数据构造。
 
 ### `ClamshellStatus`
 
@@ -654,11 +648,11 @@ public init(
 public var isAvailable: Bool { get }
 ```
 
-仅当状态为 `.available` 时返回 `true` 其余状态均返回 `false`
+该属性返回布尔值。状态为 `.available` 时以 `true` 表示，其他状态以 `false` 表示。
 
 ### `ClamshellError`
 
-表示读取或观察屏幕开合传感器时产生的错误。该类型实现 `LocalizedError` 可通过 `errorDescription` 或 `localizedDescription` 获取错误描述
+表示读取或观察屏幕开合传感器时产生的错误。该类型实现 `LocalizedError` 协议，可通过 `errorDescription` 属性或 `localizedDescription` 属性获取错误描述。
 
 #### 错误值
 
@@ -671,7 +665,7 @@ public var isAvailable: Bool { get }
 | `.disconnected` | 已连接设备断开 |
 | `.invalidData` | 设备返回无效数据 |
 | `.invalidOptions` | 观察配置无效 |
-| `.systemError(code:)` | IOKit 系统错误；`code` 为原始 `Int32` 错误码 |
+| `.systemError(code:)` | IOKit 系统错误，字段 `code` 提供原始 `Int32` 错误码 |
 
 #### `errorDescription`
 
@@ -679,15 +673,15 @@ public var isAvailable: Bool { get }
 public var errorDescription: String? { get }
 ```
 
-返回当前错误的英文说明 `.systemError(code:)` 的说明会将错误码格式化为十六进制，便于与IOKit 诊断信息对应。
+返回当前错误的英文说明。针对 `.systemError(code:)` 错误，说明会将错误码格式化为十六进制，便于与 IOKit 诊断信息对应。
 
 ### 协议遵循
 
 | 类型 | 遵循的协议 |
 | --- | --- |
 | `ClamshellMonitor` | `Sendable` |
-| `ClamshellObservationOptions` | `Sendable`、`Equatable` |
-| `ClamshellAngle` | `Sendable`、`Equatable` |
-| `ClamshellReading` | `Sendable`、`Equatable` |
-| `ClamshellStatus` | `Sendable`、`Equatable` |
-| `ClamshellError` | `Error`、`LocalizedError`、`Sendable`、`Equatable` |
+| `ClamshellObservationOptions` | `Sendable` 与 `Equatable` |
+| `ClamshellAngle` | `Sendable` 与 `Equatable` |
+| `ClamshellReading` | `Sendable` 与 `Equatable` |
+| `ClamshellStatus` | `Sendable` 与 `Equatable` |
+| `ClamshellError` | `Error` 和 `LocalizedError` 以及 `Sendable` 与 `Equatable` |
