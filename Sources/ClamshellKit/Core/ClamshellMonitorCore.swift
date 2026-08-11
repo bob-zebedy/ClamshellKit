@@ -4,6 +4,8 @@ import Foundation
 actor ClamshellMonitorCore {
     typealias Continuation = AsyncThrowingStream<ClamshellReading, any Error>.Continuation
 
+    private static let nanosecondsPerSecond = 1000000000.0
+
     private struct Observer {
         let continuation: Continuation
         let maximumFrequency: Double?
@@ -12,16 +14,22 @@ actor ClamshellMonitorCore {
     }
 
     private let source: any ClamshellAngleSource
+    private let diagnostics: ClamshellDiagnosticHub
 
     private var observers: [UUID: Observer] = [:]
     private var isSourceOpen = false
-    private var estimator = ClamshellMotionEstimator()
+    private var estimator: ClamshellMotionEstimator
     private var latestReading: ClamshellReading?
     private var pollingTask: Task<Void, Never>?
     private var pollingGeneration: UInt64 = 0
 
-    init(source: any ClamshellAngleSource) {
+    init(
+        source: any ClamshellAngleSource,
+        diagnostics: ClamshellDiagnosticHub
+    ) {
         self.source = source
+        self.diagnostics = diagnostics
+        estimator = ClamshellMotionEstimator(diagnostics: diagnostics)
     }
 
     var status: ClamshellStatus {
@@ -32,7 +40,9 @@ actor ClamshellMonitorCore {
                 _ = try readAngle()
                 return .available
             } catch {
-                return Self.status(for: Self.normalize(error))
+                let normalized = Self.normalize(error)
+                emitFailure(operation: "status", error: normalized)
+                return Self.status(for: normalized)
             }
         }
     }
@@ -43,7 +53,9 @@ actor ClamshellMonitorCore {
         do {
             return try readAngle()
         } catch {
-            throw Self.normalize(error)
+            let normalized = Self.normalize(error)
+            emitFailure(operation: "angle", error: normalized)
+            throw normalized
         }
     }
 
@@ -70,7 +82,7 @@ actor ClamshellMonitorCore {
 
         do {
             if wasEmpty || !isSourceOpen {
-                resetMotionState()
+                resetMotionState(reason: "observationStarted")
                 let angle = try readFromSource()
                 process(angle: angle)
             } else if let latestReading {
@@ -86,7 +98,9 @@ actor ClamshellMonitorCore {
         } catch {
             observers.removeValue(forKey: id)
             closeSourceIfIdle()
-            continuation.finish(throwing: Self.normalize(error))
+            let normalized = Self.normalize(error)
+            emitFailure(operation: "observer.add", error: normalized)
+            continuation.finish(throwing: normalized)
         }
     }
 
@@ -97,7 +111,7 @@ actor ClamshellMonitorCore {
 
         if observers.isEmpty {
             stopPolling()
-            resetMotionState()
+            resetMotionState(reason: "observationEnded")
             closeSource()
         } else {
             restartPolling()
@@ -113,7 +127,7 @@ actor ClamshellMonitorCore {
         do {
             return try readFromSource()
         } catch {
-            resetMotionState()
+            resetMotionState(reason: "readFailed")
             closeSource()
             throw error
         }
@@ -133,7 +147,7 @@ actor ClamshellMonitorCore {
             return
         }
 
-        resetMotionState()
+        resetMotionState(reason: "sourceIdle")
         closeSource()
     }
 
@@ -155,6 +169,7 @@ actor ClamshellMonitorCore {
         pollingGeneration &+= 1
         let generation = pollingGeneration
         let interval = pollingIntervalNanoseconds
+        emitPollingConfiguration(interval: interval)
 
         pollingTask?.cancel()
         pollingTask = Task { [weak self] in
@@ -178,7 +193,9 @@ actor ClamshellMonitorCore {
         return Self.nanoseconds(for: frequency)
     }
 
-    private func poll(generation: UInt64, interval: UInt64) async {
+    private func poll(generation: UInt64, interval initialInterval: UInt64) async {
+        var interval = initialInterval
+
         while !Task.isCancelled, generation == pollingGeneration, !observers.isEmpty {
             do {
                 try await Task.sleep(nanoseconds: interval)
@@ -194,10 +211,15 @@ actor ClamshellMonitorCore {
                 let angle = try readFromSource()
                 process(angle: angle)
             } catch {
-                resetMotionState()
+                resetMotionState(reason: "pollingReadFailed")
 
                 do {
                     let angle = try await reconnectAndRead(generation: generation)
+                    let reconnectedInterval = pollingIntervalNanoseconds
+                    if reconnectedInterval != interval {
+                        interval = reconnectedInterval
+                        emitPollingConfiguration(interval: interval)
+                    }
                     process(angle: angle)
                 } catch is CancellationError {
                     return
@@ -206,11 +228,27 @@ actor ClamshellMonitorCore {
                         return
                     }
 
-                    finishObservers(throwing: Self.normalize(error))
+                    let normalized = Self.normalize(error)
+                    emitFailure(operation: "polling", error: normalized)
+                    finishObservers(throwing: normalized)
                     return
                 }
             }
         }
+    }
+
+    private func emitPollingConfiguration(interval: UInt64) {
+        let frequency = Self.nanosecondsPerSecond / Double(interval)
+
+        diagnostics.emit(
+            .pollingConfigured,
+            level: .verbose,
+            fields: [
+                "frequency": .floatingPoint(frequency),
+                "intervalNanoseconds": .unsignedInteger(interval),
+                "observerCount": .integer(Int64(observers.count))
+            ]
+        )
     }
 
     private func reconnectAndRead(generation: UInt64) async throws -> ClamshellAngle {
@@ -219,10 +257,20 @@ actor ClamshellMonitorCore {
         let retryDelays: [UInt64] = [0, 250000000, 750000000]
         var lastError: ClamshellError = .unavailable
 
-        for delay in retryDelays {
+        for (attemptIndex, delay) in retryDelays.enumerated() {
             guard generation == pollingGeneration, !observers.isEmpty else {
                 throw CancellationError()
             }
+
+            let attempt = attemptIndex + 1
+            diagnostics.emit(
+                .reconnectAttempt,
+                level: .basic,
+                fields: [
+                    "attempt": .integer(Int64(attempt)),
+                    "delayNanoseconds": .unsignedInteger(delay)
+                ]
+            )
 
             if delay > 0 {
                 try await Task.sleep(nanoseconds: delay)
@@ -233,10 +281,25 @@ actor ClamshellMonitorCore {
             }
 
             do {
-                return try readFromSource()
+                let angle = try readFromSource()
+                diagnostics.emit(
+                    .reconnectSucceeded,
+                    level: .basic,
+                    fields: ["attempt": .integer(Int64(attempt))]
+                )
+                return angle
             } catch {
                 lastError = Self.normalize(error)
                 closeSource()
+                diagnostics.emit(
+                    .reconnectFailed,
+                    level: .basic,
+                    fields: [
+                        "attempt": .integer(Int64(attempt)),
+                        "error": .string(lastError.diagnosticName),
+                        "recoverable": .boolean(Self.isRecoverable(lastError))
+                    ]
+                )
 
                 guard Self.isRecoverable(lastError) else {
                     throw lastError
@@ -253,6 +316,10 @@ actor ClamshellMonitorCore {
     ) {
         let now = DispatchTime.now().uptimeNanoseconds
         var terminatedObservers: [UUID] = []
+        var deliveredCount = 0
+        var droppedCount = 0
+        var throttledCount = 0
+        var unchangedCount = 0
 
         for id in Array(observers.keys) {
             guard var observer = observers[id] else {
@@ -261,6 +328,7 @@ actor ClamshellMonitorCore {
 
             let isForced = forcedObservers.contains(id)
             guard isForced || observer.lastValue != value else {
+                unchangedCount += 1
                 continue
             }
 
@@ -270,13 +338,20 @@ actor ClamshellMonitorCore {
                 let minimumInterval = Self.nanoseconds(for: maximumFrequency)
 
                 guard now &- lastDeliveryTime >= minimumInterval else {
+                    throttledCount += 1
                     continue
                 }
             }
 
-            if case .terminated = observer.continuation.yield(value) {
+            let result = observer.continuation.yield(value)
+            if case .terminated = result {
                 terminatedObservers.append(id)
                 continue
+            }
+
+            deliveredCount += 1
+            if case .dropped = result {
+                droppedCount += 1
             }
 
             observer.lastValue = value
@@ -288,9 +363,23 @@ actor ClamshellMonitorCore {
             observers.removeValue(forKey: id)
         }
 
+        diagnostics.emit(
+            .delivery,
+            level: .verbose,
+            fields: [
+                "angle": .floatingPoint(value.angle.degrees),
+                "deliveredCount": .integer(Int64(deliveredCount)),
+                "droppedCount": .integer(Int64(droppedCount)),
+                "observerCount": .integer(Int64(observers.count)),
+                "terminatedCount": .integer(Int64(terminatedObservers.count)),
+                "throttledCount": .integer(Int64(throttledCount)),
+                "unchangedCount": .integer(Int64(unchangedCount))
+            ]
+        )
+
         if observers.isEmpty {
             stopPolling()
-            resetMotionState()
+            resetMotionState(reason: "observationEnded")
             closeSource()
         }
     }
@@ -298,7 +387,7 @@ actor ClamshellMonitorCore {
     private func finishObservers(throwing error: ClamshellError) {
         let continuations = observers.values.map(\.continuation)
         observers.removeAll()
-        resetMotionState()
+        resetMotionState(reason: "observationFailed")
         stopPolling()
         closeSource()
 
@@ -322,9 +411,25 @@ actor ClamshellMonitorCore {
         deliver(reading)
     }
 
-    private func resetMotionState() {
-        estimator.reset()
+    private func resetMotionState(reason: String) {
+        estimator.reset(reason: reason)
         latestReading = nil
+    }
+
+    private func emitFailure(
+        operation: String,
+        error: ClamshellError
+    ) {
+        var fields: [String: ClamshellDiagnosticValue] = [
+            "error": .string(error.diagnosticName),
+            "operation": .string(operation)
+        ]
+
+        if case let .systemError(code) = error {
+            fields["systemCode"] = .integer(Int64(code))
+        }
+
+        diagnostics.emit(.failure, level: .basic, fields: fields)
     }
 
     private static func normalize(_ error: any Error) -> ClamshellError {
@@ -362,7 +467,7 @@ actor ClamshellMonitorCore {
     }
 
     private static func nanoseconds(for frequency: Double) -> UInt64 {
-        let nanoseconds = 1000000000 / frequency
+        let nanoseconds = nanosecondsPerSecond / frequency
 
         guard nanoseconds.isFinite,
               nanoseconds < Double(UInt64.max) else {
