@@ -2,4 +2,5 @@
 .swiftpm/
 .zed/
 .DS_Store
+*.log
 xcuserdata/

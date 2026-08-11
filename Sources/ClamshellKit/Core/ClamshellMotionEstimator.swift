@@ -35,20 +35,27 @@ struct ClamshellMotionEstimator {
     private var angleSamples: [Sample] = []
     private var velocitySamples: [Sample] = []
     private var isMoving = false
+    private let diagnostics: ClamshellDiagnosticHub?
+
+    init(diagnostics: ClamshellDiagnosticHub? = nil) {
+        self.diagnostics = diagnostics
+    }
 
     mutating func add(
         angle: ClamshellAngle,
         timestamp: UInt64
     ) -> ClamshellReading? {
         guard angle.degrees.isFinite else {
-            reset()
+            reset(reason: "nonFiniteAngle")
             return nil
         }
 
-        if let previous = angleSamples.last,
-           timestamp <= previous.timestamp
-           || timestamp - previous.timestamp > Self.maximumGapNanoseconds {
-            reset()
+        if let previous = angleSamples.last {
+            if timestamp <= previous.timestamp {
+                reset(reason: "nonMonotonicTimestamp")
+            } else if timestamp - previous.timestamp > Self.maximumGapNanoseconds {
+                reset(reason: "samplingGap")
+            }
         }
 
         angleSamples.append(
@@ -59,6 +66,7 @@ struct ClamshellMotionEstimator {
             to: Self.velocityWindowNanoseconds,
             endingAt: timestamp
         )
+        emitSample(angle: angle, timestamp: timestamp)
 
         guard hasMinimumSpan(
             angleSamples,
@@ -67,9 +75,19 @@ struct ClamshellMotionEstimator {
             return nil
         }
 
+        let wasMoving = isMoving
         updateMotionState(estimatedVelocity: velocityRegression.slope)
 
+        emitMotionStateChange(
+            from: wasMoving,
+            estimatedVelocity: velocityRegression.slope
+        )
+
         let velocity = filteredVelocity(velocityRegression.slope)
+        emitVelocity(
+            regression: velocityRegression,
+            filteredVelocity: velocity
+        )
         appendVelocity(
             velocity,
             timestamp: velocityRegression.meanTimestamp
@@ -82,6 +100,15 @@ struct ClamshellMotionEstimator {
             return nil
         }
 
+        let rawAcceleration = accelerationRegression.slope
+        let acceleration = isMoving
+            ? filteredAcceleration(rawAcceleration)
+            : 0
+        emitAcceleration(
+            rawAcceleration: rawAcceleration,
+            filteredAcceleration: acceleration
+        )
+
         guard isMoving else {
             return ClamshellReading(
                 angle: angle,
@@ -93,13 +120,90 @@ struct ClamshellMotionEstimator {
         return ClamshellReading(
             angle: angle,
             angularVelocity: velocity,
-            angularAcceleration: filteredAcceleration(
-                accelerationRegression.slope
-            )
+            angularAcceleration: acceleration
         )
     }
 
-    mutating func reset() {
+    private func emitSample(
+        angle: ClamshellAngle,
+        timestamp: UInt64
+    ) {
+        diagnostics?.emit(
+            .estimatorSample,
+            level: .trace,
+            fields: [
+                "angle": .floatingPoint(angle.degrees),
+                "angleSampleCount": .integer(Int64(angleSamples.count)),
+                "angleSpanNanoseconds": .unsignedInteger(span(of: angleSamples)),
+                "timestamp": .unsignedInteger(timestamp)
+            ]
+        )
+    }
+
+    private func emitMotionStateChange(
+        from previousState: Bool,
+        estimatedVelocity: Double
+    ) {
+        guard isMoving != previousState else {
+            return
+        }
+
+        diagnostics?.emit(
+            .motionStateChanged,
+            level: .trace,
+            fields: [
+                "estimatedVelocity": .floatingPoint(estimatedVelocity),
+                "isMoving": .boolean(isMoving)
+            ]
+        )
+    }
+
+    private func emitVelocity(
+        regression: Regression,
+        filteredVelocity: Double
+    ) {
+        diagnostics?.emit(
+            .estimatorVelocity,
+            level: .trace,
+            fields: [
+                "angleSampleCount": .integer(Int64(angleSamples.count)),
+                "angleSpanNanoseconds": .unsignedInteger(span(of: angleSamples)),
+                "filteredVelocity": .floatingPoint(filteredVelocity),
+                "isMoving": .boolean(isMoving),
+                "rawVelocity": .floatingPoint(regression.slope),
+                "regressionTimestamp": .unsignedInteger(regression.meanTimestamp)
+            ]
+        )
+    }
+
+    private func emitAcceleration(
+        rawAcceleration: Double,
+        filteredAcceleration: Double
+    ) {
+        diagnostics?.emit(
+            .estimatorAcceleration,
+            level: .trace,
+            fields: [
+                "filteredAcceleration": .floatingPoint(filteredAcceleration),
+                "isMoving": .boolean(isMoving),
+                "rawAcceleration": .floatingPoint(rawAcceleration),
+                "velocitySampleCount": .integer(Int64(velocitySamples.count)),
+                "velocitySpanNanoseconds": .unsignedInteger(span(of: velocitySamples))
+            ]
+        )
+    }
+
+    mutating func reset(reason: String) {
+        diagnostics?.emit(
+            .estimatorReset,
+            level: .trace,
+            fields: [
+                "angleSampleCount": .integer(Int64(angleSamples.count)),
+                "reason": .string(reason),
+                "velocitySampleCount": .integer(Int64(velocitySamples.count)),
+                "wasMoving": .boolean(isMoving)
+            ]
+        )
         angleSamples.removeAll(keepingCapacity: true)
         velocitySamples.removeAll(keepingCapacity: true)
         isMoving = false
@@ -229,13 +333,7 @@ struct ClamshellMotionEstimator {
         _ samples: [Sample],
         _ minimumSpan: UInt64
     ) -> Bool {
-        guard samples.count >= 2,
-              let firstTimestamp = samples.first?.timestamp,
-              let lastTimestamp = samples.last?.timestamp else {
-            return false
-        }
-
-        return lastTimestamp - firstTimestamp >= minimumSpan
+        samples.count >= 2 && span(of: samples) >= minimumSpan
     }
 
     private func filteredVelocity(_ velocity: Double) -> Double {
@@ -252,6 +350,15 @@ struct ClamshellMotionEstimator {
 
     private func seconds(_ nanoseconds: UInt64) -> Double {
         Double(nanoseconds) / Self.nanosecondsPerSecond
+    }
+
+    private func span(of samples: [Sample]) -> UInt64 {
+        guard let firstTimestamp = samples.first?.timestamp,
+              let lastTimestamp = samples.last?.timestamp else {
+            return 0
+        }
+
+        return lastTimestamp - firstTimestamp
     }
 
     private func trim(

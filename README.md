@@ -11,29 +11,29 @@ ClamshellKit 面向 macOS 平台，以 Swift SDK 形式读取 Mac 笔记本的�
 ### Xcode
 
 1. 选择 **File > Add Package Dependencies…**
-2. 输入仓库地址
+2. 输入地址
 
     ```text
     https://github.com/bob-zebedy/ClamshellKit.git
     ```
 
-3. 将 `Dependency Rule` 设置为 `Branch` 并填写 `main`
+3. 将 `Dependency Rule` 设置为 **Exact Version** 填写对应的 Tag 版本
 4. 将 `ClamshellKit` 添加到 macOS App 的 `target`
 
 ### `Package.swift`
 
-将 ClamshellKit 添加到包的依赖中：
+将 ClamshellKit 添加到包的依赖中
 
 ```swift
 dependencies: [
     .package(
         url: "https://github.com/bob-zebedy/ClamshellKit.git",
-        branch: "main"
+        exact: "x.x.x"
     )
 ]
 ```
 
-然后在对应的 `target` 中引用：
+然后在对应的 `target` 中引用
 
 ```swift
 dependencies: [
@@ -43,7 +43,7 @@ dependencies: [
 
 ## 快速使用
 
-在支持 `async throws` 的上下文中读取当前角度：
+在支持 `async throws` 的上下文中读取当前角度
 
 ```swift
 import ClamshellKit

@@ -3,13 +3,24 @@ import Foundation
 /// Reads and observes the clamshell state of supported Mac notebooks
 public final class ClamshellMonitor: Sendable {
     private let core: ClamshellMonitorCore
+    private let diagnosticHub: ClamshellDiagnosticHub
 
     public init() {
-        core = ClamshellMonitorCore(source: IOKitHIDSource())
+        let diagnosticHub = ClamshellDiagnosticHub()
+        self.diagnosticHub = diagnosticHub
+        core = ClamshellMonitorCore(
+            source: IOKitHIDSource(diagnostics: diagnosticHub),
+            diagnostics: diagnosticHub
+        )
     }
 
     init(source: any ClamshellAngleSource) {
-        core = ClamshellMonitorCore(source: source)
+        let diagnosticHub = ClamshellDiagnosticHub()
+        self.diagnosticHub = diagnosticHub
+        core = ClamshellMonitorCore(
+            source: source,
+            diagnostics: diagnosticHub
+        )
     }
 
     /// The device's current availability
@@ -82,5 +93,16 @@ public final class ClamshellMonitor: Sendable {
                 }
             }
         }
+    }
+
+    /// Returns an independent stream of opt-in diagnostic events
+    ///
+    /// Creating this stream enables diagnostics at the requested level
+    /// Cancelling or releasing it disables that subscription
+    /// Diagnostic subscriptions never open or keep the sensor connection alive
+    public func observeDiagnostics(
+        options: ClamshellDiagnosticsOptions = .default
+    ) -> AsyncStream<ClamshellDiagnosticEvent> {
+        diagnosticHub.stream(options: options)
     }
 }

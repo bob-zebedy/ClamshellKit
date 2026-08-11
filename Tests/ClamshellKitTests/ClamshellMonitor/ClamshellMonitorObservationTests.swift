@@ -79,6 +79,56 @@ final class ClamshellMonitorObservationTests: XCTestCase {
         XCTAssertEqual(source.snapshot.closeCount, 1)
     }
 
+    func testObservationRefreshesPollingFrequencyAfterReconnect() async throws {
+        let source = TestAngleSource(
+            angle: 45,
+            maximumObservationFrequency: 200,
+            reconnectedMaximumObservationFrequency: 20
+        )
+        let monitor = ClamshellMonitor(source: source)
+        let diagnostics = monitor.observeDiagnostics(
+            options: .init(level: .verbose)
+        )
+        let collectedConfigurations = expectation(
+            description: "Collected initial and reconnected polling configurations"
+        )
+        let configurationTask = Task { () -> [UInt64] in
+            var intervals: [UInt64] = []
+
+            for await event in diagnostics where event.kind == .pollingConfigured {
+                guard case let .unsignedInteger(interval)? =
+                    event.fields["intervalNanoseconds"] else {
+                    continue
+                }
+
+                intervals.append(interval)
+                if intervals.count == 2 {
+                    collectedConfigurations.fulfill()
+                    return intervals
+                }
+            }
+
+            return intervals
+        }
+        let stream = monitor.observe()
+        var iterator = stream.makeAsyncIterator()
+
+        let initialReading = try await iterator.next()
+        XCTAssertEqual(initialReading?.angle, ClamshellAngle(degrees: 45))
+
+        source.setAngle(80)
+        source.failNextReads(1, with: .disconnected)
+
+        let recoveredReading = try await iterator.next()
+        XCTAssertEqual(recoveredReading?.angle, ClamshellAngle(degrees: 80))
+
+        await fulfillment(of: [collectedConfigurations], timeout: 1)
+        configurationTask.cancel()
+        let intervals = await configurationTask.value
+
+        XCTAssertEqual(intervals, [5000000, 50000000])
+    }
+
     func testCancellingObservationClosesConnection() async throws {
         let source = TestAngleSource(angle: 60)
         let monitor = ClamshellMonitor(source: source)

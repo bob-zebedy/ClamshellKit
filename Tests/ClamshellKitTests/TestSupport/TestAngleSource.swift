@@ -8,10 +8,14 @@ final class TestAngleSource: ClamshellAngleSource, @unchecked Sendable {
         let closeCount: Int
     }
 
-    let maximumObservationFrequency: Double
+    var maximumObservationFrequency: Double {
+        withLock { currentMaximumObservationFrequency }
+    }
 
     private let lock = NSLock()
     private var angle: ClamshellAngle
+    private var currentMaximumObservationFrequency: Double
+    private let reconnectedMaximumObservationFrequency: Double?
     private let openError: ClamshellError?
     private let readError: ClamshellError?
     private var pendingReadFailures: (count: Int, error: ClamshellError)?
@@ -23,11 +27,13 @@ final class TestAngleSource: ClamshellAngleSource, @unchecked Sendable {
     init(
         angle: Double,
         maximumObservationFrequency: Double = 60,
+        reconnectedMaximumObservationFrequency: Double? = nil,
         openError: ClamshellError? = nil,
         readError: ClamshellError? = nil
     ) {
         self.angle = ClamshellAngle(degrees: angle)
-        self.maximumObservationFrequency = maximumObservationFrequency
+        currentMaximumObservationFrequency = maximumObservationFrequency
+        self.reconnectedMaximumObservationFrequency = reconnectedMaximumObservationFrequency
         self.openError = openError
         self.readError = readError
     }
@@ -74,6 +80,11 @@ final class TestAngleSource: ClamshellAngleSource, @unchecked Sendable {
             openCount += 1
             if let openError {
                 throw openError
+            }
+
+            if openCount > 1,
+               let reconnectedMaximumObservationFrequency {
+                currentMaximumObservationFrequency = reconnectedMaximumObservationFrequency
             }
 
             isOpen = true
