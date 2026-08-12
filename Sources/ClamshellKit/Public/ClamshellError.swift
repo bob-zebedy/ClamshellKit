@@ -22,7 +22,7 @@ public enum ClamshellError: Error, LocalizedError, Sendable, Equatable {
         case .accessDenied:
             "macOS denied access to the clamshell-angle device"
         case .disconnected:
-            "The clamshell-angle device was disconnected"
+            "The clamshell-angle device was disconnected or its connection was closed"
         case .invalidData:
             "The clamshell-angle device returned invalid data"
         case .invalidOptions:

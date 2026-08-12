@@ -80,9 +80,12 @@ dependencies: [
 | 只需要当前角度 | `angle()` | 一次传感器读取，开销最低 |
 | 一次获取角度和运动数据 | `reading()` | 收集短序列后返回估算结果 |
 | 连续更新界面或记录数据 | `observe(options:)` | 返回异步流，支持限频和取消 |
+| 主动释放传感器连接 | `disconnect()` | 等待资源关闭，监视器之后仍可复用 |
 | 排查设备识别、协议解析或运动估算 | `observeDiagnostics(options:)` | 在原有输出之外返回结构化诊断事件 |
 
-建议在同一功能生命周期内复用一个 `ClamshellMonitor` 实例。该类型实现 `Sendable` 协议，可以安全地跨并发任务传递。使用时不需要手动打开或关闭传感器连接
+建议在同一功能生命周期内复用一个 `ClamshellMonitor` 实例。该类型实现 `Sendable` 协议，可以安全地跨并发任务传递
+
+连接通常会自动管理，需要在明确的生命周期边界立即释放资源时，可以调用 `disconnect()`
 
 ## 创建监视器
 
@@ -219,6 +222,7 @@ observationTask.cancel()
 - 只发送发生变化的读数，不重复发送完全相同的值
 - 慢消费者最多保留一条最新待读取值，中间值可能被合并
 - 遇到临时断线时会自动尝试重新连接，无法恢复时以错误结束
+- 调用 `disconnect()` 时，当前观察流会以 `.disconnected` 结束
 - 取消消费任务或释放流后，订阅会自动移除，最后一个订阅结束时连接会关闭
 
 使用 `observe(options:)` 可以展示最新状态，但不能保证交付每一个底层采样值
@@ -483,7 +487,7 @@ public struct ClamshellObservationOptions: Sendable, Equatable {
 | `.notFound` | 未找到兼容设备 | 提示当前环境未找到兼容传感器 |
 | `.unsupported` | 设备或报告格式不受支持 | 更新 SDK 或禁用相关功能 |
 | `.accessDenied` | 系统拒绝访问设备 | 提示用户检查运行环境或系统限制 |
-| `.disconnected` | 已建立的设备连接失效 | 一次读取可重试；观察流会先尝试自动恢复 |
+| `.disconnected` | 已建立的设备连接失效或被主动关闭 | 意外断开时可以重试；主动断开后按需创建新的数据操作 |
 | `.invalidData` | 设备返回无效数据 | 停止使用本次结果并记录诊断信息 |
 | `.invalidOptions` | `ClamshellObservationOptions` 无效 | 修正 `maximumFrequency` |
 | `.systemError(code:)` | IOKit 返回系统错误 | 记录错误码并按暂时不可用处理 |
@@ -527,7 +531,10 @@ do {
 - 每个观察流拥有独立的发送频率和最新值缓冲
 - 诊断流不参与设备连接引用计数，单独存在时不会访问或保持硬件
 - 每个诊断流拥有独立的级别和 `256` 条最新事件缓冲
-- 无需调用 `close()` 方法，取消任务或结束流消费即可释放订阅资源
+- 没有活动观察者时，连接会在一次读取结束或最后一个观察流退出后自动关闭
+- 调用 `disconnect()` 会结束当前观察与等待中的 `reading()` 并等待底层连接完整关闭
+- 主动断开会清空当前运动估算状态，后续数据操作会按需重新建立连接并收集新样本
+- 通常只需取消任务或结束流消费；`disconnect()` 用于需要确定性释放全部当前连接资源的场景
 
 在 App 中持续观察时，建议把返回的 `Task` 保存在与页面或功能相同的生命周期内，并在退出该生命周期时调用 `cancel()` 方法。更新 UI 时再交给 `MainActor` 执行，不要在主线程上进行同步等待
 
@@ -582,6 +589,7 @@ public final class ClamshellMonitor: Sendable {
 
     public func angle() async throws -> ClamshellAngle
     public func reading() async throws -> ClamshellReading
+    public func disconnect() async
 
     public func observe(
         options: ClamshellObservationOptions = .default
@@ -765,6 +773,21 @@ public func reading() async throws -> ClamshellReading
 - 设备访问失败时抛出 `ClamshellError` 错误，任务取消时可能抛出 `CancellationError`
 - 为了估算运动数据，该方法会收集一小段连续样本，通常比 `angle()` 返回更慢
 - 如果已有活动观察流和可用读数，监视器会复用现有连接和数据管线
+
+#### `disconnect()`
+
+```swift
+public func disconnect() async
+```
+
+关闭当前传感器连接并等待相关资源完整释放
+
+- 方法可以重复调用，当前没有连接时直接返回
+- 当前观察流和等待中的 `reading()` 会以 `.disconnected` 结束
+- 停止当前轮询和重连，并清除角度、角速度及角加速度的估算状态
+- `ClamshellMonitor` 实例仍可复用，后续数据操作会按需重新建立连接
+- 诊断订阅不会结束，也不会阻止连接关闭
+- 与主动断开并发启动的数据操作不保证继续执行；需要重新连接时，应在 `disconnect()` 返回后创建新的操作
 
 #### `observe(options:)`
 
@@ -996,7 +1019,7 @@ public var isAvailable: Bool { get }
 | `.notFound` | 未找到兼容的屏幕角度设备 |
 | `.unsupported` | 检测到的设备不受支持 |
 | `.accessDenied` | macOS 拒绝访问设备 |
-| `.disconnected` | 已连接设备断开 |
+| `.disconnected` | 已连接设备断开或连接被主动关闭 |
 | `.invalidData` | 设备返回无效数据 |
 | `.invalidOptions` | 观察配置无效 |
 | `.systemError(code:)` | IOKit 系统错误，字段 `code` 提供原始 `Int32` 错误码 |

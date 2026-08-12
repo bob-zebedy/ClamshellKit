@@ -4,6 +4,7 @@ import Foundation
 public final class ClamshellMonitor: Sendable {
     private let core: ClamshellMonitorCore
     private let diagnosticHub: ClamshellDiagnosticHub
+    private let lifecycle = ClamshellMonitorLifecycle()
 
     public init() {
         let diagnosticHub = ClamshellDiagnosticHub()
@@ -56,6 +57,16 @@ public final class ClamshellMonitor: Sendable {
         return reading
     }
 
+    /// Closes the current sensor connection and releases its resources
+    ///
+    /// Active observations and pending calls to ``reading()`` fail with
+    /// ``ClamshellError/disconnected``. The monitor remains reusable, and the
+    /// next data operation opens a new connection lazily.
+    public func disconnect() async {
+        let generation = lifecycle.beginDisconnection()
+        await core.disconnect(generation: generation)
+    }
+
     /// Returns a stream of angle and estimated rotational-motion readings
     ///
     /// Multiple streams share one device connection
@@ -72,11 +83,13 @@ public final class ClamshellMonitor: Sendable {
 
         let id = UUID()
         let core = core
+        let generation = lifecycle.currentGeneration
 
         return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let registration = Task {
                 await core.addObserver(
                     id: id,
+                    generation: generation,
                     options: options,
                     continuation: continuation
                 )
@@ -104,5 +117,22 @@ public final class ClamshellMonitor: Sendable {
         options: ClamshellDiagnosticsOptions = .default
     ) -> AsyncStream<ClamshellDiagnosticEvent> {
         diagnosticHub.stream(options: options)
+    }
+}
+
+/// Invalidates observation registrations synchronously when disconnection begins
+private final class ClamshellMonitorLifecycle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+
+    var currentGeneration: UInt64 {
+        lock.withLock { generation }
+    }
+
+    func beginDisconnection() -> UInt64 {
+        lock.withLock {
+            generation &+= 1
+            return generation
+        }
     }
 }

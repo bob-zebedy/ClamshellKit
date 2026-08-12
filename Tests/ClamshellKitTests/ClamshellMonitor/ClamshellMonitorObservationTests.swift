@@ -55,6 +55,67 @@ final class ClamshellMonitorObservationTests: XCTestCase {
         XCTAssertEqual(source.snapshot.closeCount, 0)
     }
 
+    func testDisconnectClosesConnectionAndAllowsReopening() async throws {
+        let source = TestAngleSource(
+            angle: 120,
+            maximumObservationFrequency: 200
+        )
+        let monitor = ClamshellMonitor(source: source)
+        let firstStream = monitor.observe()
+        var firstIterator = firstStream.makeAsyncIterator()
+
+        let firstReading = try await firstIterator.next()
+        XCTAssertEqual(firstReading?.angle, ClamshellAngle(degrees: 120))
+
+        await monitor.disconnect()
+        await monitor.disconnect()
+
+        do {
+            _ = try await firstIterator.next()
+            XCTFail("Expected disconnect to end the active observation")
+        } catch {
+            XCTAssertEqual(error as? ClamshellError, .disconnected)
+        }
+
+        XCTAssertEqual(source.snapshot.openCount, 1)
+        XCTAssertEqual(source.snapshot.closeCount, 1)
+
+        source.setAngle(75)
+
+        let secondStream = monitor.observe()
+        var secondIterator = secondStream.makeAsyncIterator()
+        let secondReading = try await secondIterator.next()
+
+        XCTAssertEqual(secondReading?.angle, ClamshellAngle(degrees: 75))
+        XCTAssertEqual(source.snapshot.openCount, 2)
+        XCTAssertEqual(source.snapshot.closeCount, 1)
+
+        await monitor.disconnect()
+
+        XCTAssertEqual(source.snapshot.closeCount, 2)
+    }
+
+    func testDisconnectRejectsObservationCreatedBeforeDisconnection() async {
+        let source = TestAngleSource(
+            angle: 120,
+            maximumObservationFrequency: 1
+        )
+        let monitor = ClamshellMonitor(source: source)
+        let stream = monitor.observe()
+
+        await monitor.disconnect()
+
+        var iterator = stream.makeAsyncIterator()
+        do {
+            _ = try await iterator.next()
+            XCTFail("Expected the old observation lifecycle to be disconnected")
+        } catch {
+            XCTAssertEqual(error as? ClamshellError, .disconnected)
+        }
+
+        XCTAssertEqual(source.snapshot.openCount, source.snapshot.closeCount)
+    }
+
     func testObservationReconnectsAfterDisconnection() async throws {
         let source = TestAngleSource(
             angle: 45,

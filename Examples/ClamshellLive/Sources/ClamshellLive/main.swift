@@ -59,23 +59,72 @@ struct ClamshellLive {
             return
         }
 
-        writeOutput("按 Control-C 退出\n")
+        writeOutput(
+            "正在读取屏幕开合传感器...\n"
+                + "S 断开传感器连接\n"
+                + "C 重新连接传感器\n"
+                + "Control-C 退出\n\n"
+        )
 
+        let controller = LiveController(monitor: monitor)
+        let (commands, commandContinuation) = AsyncStream<LiveCommand>.makeStream()
+        let keyboardHandler = KeyboardHandler { key in
+            if let command = command(for: key) {
+                commandContinuation.yield(command)
+            }
+        }
+
+        await controller.connect()
+
+        await withTaskCancellationHandler {
+            for await command in commands {
+                switch command {
+                case .disconnect:
+                    await controller.disconnect()
+                case .connect:
+                    await controller.connect()
+                }
+            }
+        } onCancel: {
+            commandContinuation.finish()
+        }
+
+        commandContinuation.finish()
+        await controller.shutdown()
+        withExtendedLifetime(keyboardHandler) {}
+        writeOutput("\n")
+    }
+
+    private static func command(for key: UInt8) -> LiveCommand? {
+        if key == Character("s").asciiValue
+            || key == Character("S").asciiValue {
+            return .disconnect
+        }
+        if key == Character("c").asciiValue
+            || key == Character("C").asciiValue {
+            return .connect
+        }
+
+        return nil
+    }
+
+    private static func observe(monitor: ClamshellMonitor) async -> ObservationResult {
         do {
             var hasRendered = false
+
+            writeOutput("传感器已连接\n")
 
             for try await reading in monitor.observe() {
                 render(reading, replacingPreviousFrame: hasRendered)
                 hasRendered = true
             }
-        } catch is CancellationError {
-            // Cancellation is the expected way to stop observing
-        } catch {
-            writeError("\n读取停止: \(error.localizedDescription)\n")
-            return
-        }
 
-        writeOutput("\n")
+            return .finished
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failed(error.localizedDescription)
+        }
     }
 
     private static func makeDiagnosticsSession(
@@ -154,6 +203,92 @@ struct ClamshellLive {
 
     private static func writeError(_ text: String) {
         FileHandle.standardError.write(Data(text.utf8))
+    }
+
+    private enum LiveCommand: Sendable {
+        case disconnect
+        case connect
+    }
+
+    private enum ObservationResult: Sendable {
+        case finished
+        case cancelled
+        case failed(String)
+    }
+
+    private actor LiveController {
+        private let monitor: ClamshellMonitor
+        private var observationTask: Task<Void, Never>?
+        private var observationGeneration: UInt64 = 0
+
+        init(monitor: ClamshellMonitor) {
+            self.monitor = monitor
+        }
+
+        func connect() {
+            guard observationTask == nil else {
+                return
+            }
+
+            observationGeneration &+= 1
+            let generation = observationGeneration
+            let monitor = monitor
+
+            ClamshellLive.writeOutput("正在连接传感器...\n")
+            observationTask = Task { [weak self] in
+                let result = await ClamshellLive.observe(monitor: monitor)
+                await self?.observationDidFinish(
+                    generation: generation,
+                    result: result
+                )
+            }
+        }
+
+        func disconnect() async {
+            await stop()
+            ClamshellLive.writeOutput(
+                "\n传感器已断开, 按 C 重新连接\n"
+            )
+        }
+
+        func shutdown() async {
+            await stop()
+        }
+
+        private func stop() async {
+            observationGeneration &+= 1
+
+            let observationTask = observationTask
+            self.observationTask = nil
+
+            observationTask?.cancel()
+            await monitor.disconnect()
+            await observationTask?.value
+        }
+
+        private func observationDidFinish(
+            generation: UInt64,
+            result: ObservationResult
+        ) {
+            guard generation == observationGeneration else {
+                return
+            }
+
+            observationTask = nil
+
+            switch result {
+            case .finished:
+                ClamshellLive.writeOutput(
+                    "\n读取结束, 按 C 重新连接\n"
+                )
+            case .cancelled:
+                break
+            case let .failed(message):
+                ClamshellLive.writeError(
+                    "\n读取停止: \(message)\n按 C 重新连接\n"
+                )
+            }
+        }
     }
 
     private final class DiagnosticsSession {
@@ -258,6 +393,47 @@ struct ClamshellLive {
             case let .cannotCreateDiagnosticsFile(path):
                 "无法创建 \(path)"
             }
+        }
+    }
+}
+
+private final class KeyboardHandler: @unchecked Sendable {
+    private let source: DispatchSourceRead
+    private let originalAttributes: termios?
+
+    init(handler: @escaping @Sendable (UInt8) -> Void) {
+        var original = termios()
+        var savedAttributes: termios?
+
+        if tcgetattr(STDIN_FILENO, &original) == 0 {
+            var attributes = original
+            attributes.c_lflag &= ~tcflag_t(ICANON | ECHO)
+
+            if tcsetattr(STDIN_FILENO, TCSANOW, &attributes) == 0 {
+                savedAttributes = original
+            }
+        }
+
+        originalAttributes = savedAttributes
+        source = DispatchSource.makeReadSource(
+            fileDescriptor: STDIN_FILENO,
+            queue: .global(qos: .userInitiated)
+        )
+        source.setEventHandler {
+            var key: UInt8 = 0
+
+            if Darwin.read(STDIN_FILENO, &key, 1) == 1 {
+                handler(key)
+            }
+        }
+        source.resume()
+    }
+
+    deinit {
+        source.cancel()
+
+        if var originalAttributes {
+            tcsetattr(STDIN_FILENO, TCSANOW, &originalAttributes)
         }
     }
 }

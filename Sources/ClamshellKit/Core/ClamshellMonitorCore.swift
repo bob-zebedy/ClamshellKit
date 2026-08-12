@@ -22,6 +22,7 @@ actor ClamshellMonitorCore {
     private var latestReading: ClamshellReading?
     private var pollingTask: Task<Void, Never>?
     private var pollingGeneration: UInt64 = 0
+    private var lifecycleGeneration: UInt64 = 0
 
     init(
         source: any ClamshellAngleSource,
@@ -61,11 +62,19 @@ actor ClamshellMonitorCore {
 
     func addObserver(
         id: UUID,
+        generation: UInt64,
         options: ClamshellObservationOptions,
         continuation: Continuation
     ) {
         guard options.isValid else {
             continuation.finish(throwing: ClamshellError.invalidOptions)
+            return
+        }
+
+        // Observation registration is asynchronous, so a stream created before
+        // the latest explicit disconnect may reach the actor afterwards
+        guard generation == lifecycleGeneration else {
+            continuation.finish(throwing: ClamshellError.disconnected)
             return
         }
 
@@ -102,6 +111,18 @@ actor ClamshellMonitorCore {
             emitFailure(operation: "observer.add", error: normalized)
             continuation.finish(throwing: normalized)
         }
+    }
+
+    func disconnect(generation: UInt64) {
+        guard generation > lifecycleGeneration else {
+            return
+        }
+
+        lifecycleGeneration = generation
+        finishObservers(
+            throwing: .disconnected,
+            resetReason: "explicitDisconnect"
+        )
     }
 
     func removeObserver(id: UUID) {
@@ -384,10 +405,13 @@ actor ClamshellMonitorCore {
         }
     }
 
-    private func finishObservers(throwing error: ClamshellError) {
+    private func finishObservers(
+        throwing error: ClamshellError,
+        resetReason: String = "observationFailed"
+    ) {
         let continuations = observers.values.map(\.continuation)
         observers.removeAll()
-        resetMotionState(reason: "observationFailed")
+        resetMotionState(reason: resetReason)
         stopPolling()
         closeSource()
 
